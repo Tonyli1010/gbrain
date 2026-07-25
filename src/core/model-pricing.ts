@@ -102,6 +102,18 @@ export const CANONICAL_PRICING: Record<string, ModelPricing> = {
   // DeepSeek v4 (verified 2026-07-27 at api-docs.deepseek.com): cache-miss rates.
   'deepseek:deepseek-v4-flash':           { input:  0.14, output:  0.28 },
   'deepseek:deepseek-v4-pro':             { input:  0.435, output: 0.87 },
+
+  // ── Dashscope / Bailian (Qwen series, verified 2026-07-06) ────────────
+  // Pricing: https://help.aliyun.com/zh/model-studio/getting-started/models
+  // qwen3.7-plus / qwen3-plus: balanced cost-quality workhorses.
+  // qwen3.7-max / qwen3-max: strongest reasoning tier.
+  'dashscope:qwen3.7-plus':               { input:  0.14, output:  0.56 },
+  'dashscope:qwen3.7-max':                { input:  0.28, output:  1.12 },
+  'dashscope:qwen3-plus':                 { input:  0.14, output:  0.56 },
+  'dashscope:qwen3-max':                  { input:  0.28, output:  1.12 },
+  'dashscope:qwen-plus':                  { input:  0.14, output:  0.56 },
+  'dashscope:qwen-max':                   { input:  0.28, output:  1.12 },
+  'dashscope:qwen-turbo':                 { input:  0.04, output:  0.16 },
 };
 
 /**
