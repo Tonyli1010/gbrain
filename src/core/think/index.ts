@@ -226,12 +226,17 @@ const THINKING_DEFAULT_MAX_OUTPUT_TOKENS = 16000;
 // 4000 default.
 const OPENAI_REASONING_MODEL_RE = /^openai[:/](?:gpt-5|o[0-9]+)(?:[.-]|$)/i;
 const OPENAI_CHAT_SNAPSHOT_RE = /-chat(?:-|$)/i; // gpt-5-chat-latest, gpt-5.2-chat-latest
+// DashScope-routed DeepSeek models (e.g. dashscope:deepseek-v4-flash-0731)
+// emit reasoning_content that eats the output budget the same way, but the
+// dashscope recipe declares no deepseek chat models, so the recipe-capability
+// path below can't see them. Cover them by name here.
+const DASHSCOPE_DEEPSEEK_RE = /^dashscope[:/]deepseek/i;
 export function maxOutputTokensFor(modelStr: string): number {
   const openaiReasoning =
     OPENAI_REASONING_MODEL_RE.test(modelStr) && !OPENAI_CHAT_SNAPSHOT_RE.test(modelStr);
   // Shared name-based predicate (#4087: one source of truth in gateway.ts —
   // provider-prefixed + bare Claude 5 spellings, never 3.5-era models).
-  if (isThinkingByDefaultModel(modelStr) || openaiReasoning) {
+  if (isThinkingByDefaultModel(modelStr) || openaiReasoning || DASHSCOPE_DEEPSEEK_RE.test(modelStr)) {
     return THINKING_DEFAULT_MAX_OUTPUT_TOKENS;
   }
   // Recipe-declared thinking-by-default (gbrain#4172, e.g. DeepSeek v4):
