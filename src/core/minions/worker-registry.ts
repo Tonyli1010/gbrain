@@ -143,21 +143,33 @@ function processLiveness(pid: number): 'alive' | 'dead' | 'unknown' {
 }
 
 /**
- * Best-effort process start time (epoch ms) via `ps`. Used for the PID-reuse
- * guard: a stale `worker-<pid>.json` plus an OS-reused pid would otherwise make
- * us report an unrelated process's niceness (Codex #8). Returns null when
+ * Best-effort process start time (epoch ms) via `ps -o etime` (elapsed since
+ * start — pure [[dd-]hh:]mm:ss numbers). Used for the PID-reuse guard: a
+ * stale `worker-<pid>.json` plus an OS-reused pid would otherwise make us
+ * report an unrelated process's niceness (Codex #8). Returns null when
  * undeterminable — callers must NOT treat null as "reused".
+ *
+ * Why etime and not lstart: lstart is locale-formatted (zh_CN emits
+ * "三 8月/19 01:07:05 2026" — Date.parse NaN) AND wall-clock, so its parse
+ * depends on the ambient TZ (bun test forces UTC while ps prints system-local
+ * — an 8h skew that false-trips the guard on every legit entry). Elapsed
+ * math sidesteps both: startMs = now − elapsed.
  */
 function processStartMs(pid: number): number | null {
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const out = execFileSync('ps', ['-o', 'etime=', '-p', String(pid)], {
       encoding: 'utf8',
       timeout: 2000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     if (!out) return null;
-    const t = Date.parse(out);
-    return Number.isNaN(t) ? null : t;
+    const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})$/.exec(out);
+    if (!m) return null;
+    const days = Number(m[1] ?? 0);
+    const hours = Number(m[2] ?? 0);
+    const mins = Number(m[3]);
+    const secs = Number(m[4]);
+    return Date.now() - (((days * 24 + hours) * 60 + mins) * 60 + secs) * 1000;
   } catch {
     return null;
   }
