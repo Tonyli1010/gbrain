@@ -3720,8 +3720,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       providerMetadata,
     };
   } catch (err) {
-    // Pessimistic fallback (A3 amended): when err.usage isn't there, charge
-    // the worst-case ceiling — better to overcount on failure than under.
+    // Known pre-inference config/auth rejections settle at zero; ambiguous
+    // failures without usage retain the pessimistic ceiling (A3 amended).
     const fallback = _extractUsageFromError(err, {
       inputTokens: estimatedInputTokens,
       outputTokens: maxOutputTokens,

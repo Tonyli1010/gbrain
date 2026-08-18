@@ -36,6 +36,7 @@ import { canonicalLookup } from '../model-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
+import { isProviderConfigRejection } from '../ai/errors.ts';
 
 export type BudgetKind = 'chat' | 'embed' | 'rerank';
 
@@ -511,8 +512,9 @@ export class BudgetTracker {
 /**
  * Pull usage out of an SDK error envelope. Common providers attach `usage`
  * either at the top level (Anthropic) or under `response.usage` (OpenAI).
- * Returns the fallback (pessimistic ceiling) when no usage can be found —
- * NOT the conservative pre-call estimate (A3 amended). Callers should pass
+ * Returns zero for an explicit pre-inference config/auth rejection, otherwise
+ * the fallback (pessimistic ceiling) when no usage can be found — NOT the
+ * conservative pre-call estimate (A3 amended). Callers should pass
  * `{ inputTokens: estimate.estimatedInputTokens, outputTokens: estimate.maxOutputTokens }`
  * so the worst-case budget is consumed on failure.
  */
@@ -535,6 +537,12 @@ export function extractUsageFromError(
           outputTokens: outputTokens ?? fallback.outputTokens,
         };
       }
+    }
+    // A known 4xx/access rejection never reached inference. With no provider
+    // usage attached, charging max output creates fictitious spend and can
+    // exhaust the local budget while the provider billed nothing.
+    if (isProviderConfigRejection(err)) {
+      return { inputTokens: 0, outputTokens: 0 };
     }
   }
   return { inputTokens: fallback.inputTokens, outputTokens: fallback.outputTokens };

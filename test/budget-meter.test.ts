@@ -51,7 +51,7 @@ describe('BudgetMeter', () => {
     expect(r.allowed).toBe(true);
   });
 
-  test('non-Anthropic model bypasses gate with warn-once + ledger entry', () => {
+  test('unknown model bypasses gate with warn-once + ledger entry', () => {
     const meter = new BudgetMeter({ budgetUsd: 0.001, phase: 'auto_think', auditPath });
     const r1 = meter.check({ modelId: 'gemini-3-pro', estimatedInputTokens: 1000, maxOutputTokens: 1000, label: 'gem1' });
     const r2 = meter.check({ modelId: 'gemini-3-pro', estimatedInputTokens: 1000, maxOutputTokens: 1000, label: 'gem2' });
@@ -118,6 +118,35 @@ describe('BudgetMeter', () => {
     });
     expect(after.allowed).toBe(false);               // gate still enforcing
     expect(Number.isFinite(after.cumulativeCostUsd)).toBe(true);
+  });
+
+  test('canonical DashScope model is priced and cannot bypass the gate', () => {
+    const meter = new BudgetMeter({ budgetUsd: 0.0005, phase: 'propose_takes', auditPath });
+    const r = meter.check({
+      modelId: 'dashscope:qwen3.7-plus',
+      estimatedInputTokens: 1500,
+      maxOutputTokens: 500,
+      label: 'proposal',
+    });
+
+    expect(r.allowed).toBe(true);
+    expect(r.unpriced).toBeUndefined();
+    expect(r.estimatedCostUsd).toBeCloseTo(0.00049, 8);
+    expect(readLedger()[0].event).toBe('submit');
+  });
+
+  test('canonical DashScope model is denied when projected cost exceeds cap', () => {
+    const meter = new BudgetMeter({ budgetUsd: 0.0004, phase: 'propose_takes', auditPath });
+    const r = meter.check({
+      modelId: 'dashscope:qwen3.7-plus',
+      estimatedInputTokens: 1500,
+      maxOutputTokens: 500,
+      label: 'proposal',
+    });
+
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toContain('BUDGET_EXHAUSTED');
+    expect(readLedger()[0].event).toBe('submit_denied');
   });
 
   test('ledger captures every submit (allowed + denied + unpriced)', () => {

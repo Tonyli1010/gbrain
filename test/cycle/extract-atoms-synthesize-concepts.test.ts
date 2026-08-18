@@ -18,6 +18,7 @@ import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-conc
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
 import type { ChatResult, ChatOpts } from '../../src/core/ai/gateway.ts';
 import { canonicalLookup } from '../../src/core/model-pricing.ts';
+import { AIConfigError } from '../../src/core/ai/errors.ts';
 
 let engine: PGLiteEngine;
 
@@ -201,6 +202,25 @@ describe('v0.41 T5: runPhaseExtractAtoms via stubbed chat', () => {
     expect(result.details?.transcripts_processed).toBe(0);
     expect(result.details?.pages_processed).toBe(0);
     expect((result.details?.failures as unknown[]).length).toBe(2);
+  });
+
+  test('permanent provider config failure stops after the first item', async () => {
+    let calls = 0;
+    const chat = async (_o: ChatOpts): Promise<never> => {
+      calls++;
+      throw new AIConfigError('Access to model denied');
+    };
+    const result = await runPhaseExtractAtoms(engine, {
+      _transcripts: [
+        { filePath: '/a.txt', content: 'a', contentHash: 'ha' },
+        { filePath: '/b.txt', content: 'b', contentHash: 'hb' },
+      ],
+      _pages: [],
+      _chat: chat as typeof import('../../src/core/ai/gateway.ts').chat,
+    });
+    expect(calls).toBe(1);
+    expect(result.status).toBe('warn');
+    expect((result.details?.failures as unknown[]).length).toBe(1);
   });
 
   // v0.41.2.1 regression case (D9 #14 wording): with _pages:[] and same

@@ -40,7 +40,13 @@ export interface ExtractAtomsDrainDeps {
    * result was actually a total provider outage, not a partial/no-op batch.
    * Omit/false for the ordinary partial-success or nothing-to-do cases.
    */
-  runBatch: () => Promise<{ extracted: number; skipped: number; providerFailure?: boolean }>;
+  runBatch: () => Promise<{
+    extracted: number;
+    skipped: number;
+    providerFailure?: boolean;
+    /** The enclosing absolute deadline aborted the in-flight item. */
+    windowExpired?: boolean;
+  }>;
   /** Count remaining eligible-but-unextracted pages, or null on query error. */
   countRemaining: () => Promise<number | null>;
   /** Injectable clock. Production: Date.now. */
@@ -52,6 +58,11 @@ export interface ExtractAtomsDrainDeps {
 export interface ExtractAtomsDrainOpts {
   /** Wallclock budget in ms. The loop stops after this elapses. */
   windowMs: number;
+  /**
+   * Optional shared absolute deadline. The production adapter passes one so
+   * both the outer batch loop and every in-flight model call obey one clock.
+   */
+  deadlineAtMs?: number;
   /** Hard cap on batches (belt-and-suspenders against a 0-progress loop). Default 1000. */
   maxBatches?: number;
 }
@@ -82,7 +93,7 @@ export async function runExtractAtomsDrain(
 ): Promise<ExtractAtomsDrainResult> {
   const maxBatches = opts.maxBatches ?? 1000;
   return deps.withLock(async () => {
-    const deadline = deps.now() + opts.windowMs;
+    const deadline = opts.deadlineAtMs ?? deps.now() + opts.windowMs;
     let extracted = 0;
     let skipped = 0;
     let batches = 0;
@@ -103,6 +114,13 @@ export async function runExtractAtomsDrain(
       skipped += r.skipped;
       batches++;
       deps.onBatch?.({ batch: batches, extracted: r.extracted, remaining: before });
+
+      // The model call consumed the remaining wall-clock budget. This is an
+      // expected bounded stop, not provider_failure/no_progress.
+      if (r.windowExpired) {
+        stopped = 'window';
+        break;
+      }
 
       // issue #3218: every item this batch attempted failed (0 succeeded, >=1
       // error) — a total provider outage, not ordinary no-op/partial progress.
@@ -195,6 +213,10 @@ export async function runExtractAtomsDrainForSource(
 
   const extractionSourceId = opts.sourceId ?? 'default';
   const lockId = cycleLockIdFor(opts.sourceId);
+  // One absolute deadline is shared by the outer loop and the per-item model
+  // abort signal. Starting separate relative timers is what let a late batch
+  // overrun `--window` by the full duration of one provider call.
+  const deadlineAtMs = Date.now() + opts.windowSeconds * 1000;
 
   return runExtractAtomsDrain(
     {
@@ -204,6 +226,7 @@ export async function runExtractAtomsDrainForSource(
           sourceId: extractionSourceId,
           dryRun: false,
           brainDir: opts.brainDir,
+          deadlineAtMs,
         });
         const d = (r.details ?? {}) as Record<string, unknown>;
         // issue #3218: `r.status` collapses to 'warn' whether ONE item failed
@@ -221,6 +244,7 @@ export async function runExtractAtomsDrainForSource(
         return {
           extracted: Number(d.atoms_extracted ?? 0),
           skipped: Number(d.duplicates_skipped ?? 0),
+          windowExpired: d.deadline_reached === true,
           providerFailure: failures.length > 0 && itemsSucceeded === 0,
         };
       },
@@ -228,6 +252,10 @@ export async function runExtractAtomsDrainForSource(
       now: Date.now,
       onBatch: opts.onBatch,
     },
-    { windowMs: opts.windowSeconds * 1000, maxBatches: opts.maxBatches },
+    {
+      windowMs: opts.windowSeconds * 1000,
+      deadlineAtMs,
+      maxBatches: opts.maxBatches,
+    },
   );
 }

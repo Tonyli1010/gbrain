@@ -37,6 +37,28 @@ export class AITransientError extends AIServiceError {
 }
 
 /**
+ * Provider rejections that happen before inference and are therefore both
+ * non-retryable and non-billable when the error carries no usage payload.
+ * Some OpenAI-compatible providers omit the HTTP status from their SDK error,
+ * so retain a narrow message fallback for explicit access/auth denials.
+ */
+export function isProviderConfigRejection(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    message?: unknown;
+    response?: { status?: unknown };
+  };
+  const status = candidate.status ?? candidate.statusCode ?? candidate.response?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 429) {
+    return true;
+  }
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  return /access to model denied|eligible for using the model|invalid api key|unauthori[sz]ed|forbidden/i.test(message);
+}
+
+/**
  * Normalize any thrown error into our hierarchy. AI SDK errors are inspected
  * by status code + name; unknown errors default to AITransientError so the
  * caller does not permanently abort on a transient network blip.
@@ -64,6 +86,16 @@ export function normalizeAIError(err: unknown, context?: string): AIServiceError
   // AI SDK named errors
   if (name === 'LoadAPIKeyError' || name === 'InvalidArgumentError') {
     return new AIConfigError(`${ctxPrefix}${msg}`, undefined, err);
+  }
+
+  // Some OpenAI-compatible providers (observed with DashScope model-access
+  // denial) drop the HTTP status before the error reaches this boundary.
+  if (isProviderConfigRejection(err)) {
+    return new AIConfigError(
+      `${ctxPrefix}${msg}`,
+      'Check your API key is valid and has access to this model.',
+      err,
+    );
   }
 
   // Everything else (5xx, timeouts, network) = transient

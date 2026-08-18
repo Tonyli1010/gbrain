@@ -482,6 +482,17 @@ describe('extractUsageFromError (A3 amended)', () => {
     });
   });
 
+  test('explicit provider access rejection with no usage is non-billable', () => {
+    expect(extractUsageFromError(
+      { status: 403, message: 'Access to model denied' },
+      fallback,
+    )).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(extractUsageFromError(
+      new Error('Access to model denied. Please make sure you are eligible for using the model.'),
+      fallback,
+    )).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
+
   test('partial usage uses fallback for the missing half', () => {
     const err = { usage: { input_tokens: 50 } };
     expect(extractUsageFromError(err, fallback)).toEqual({

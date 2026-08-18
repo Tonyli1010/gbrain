@@ -61,6 +61,7 @@ import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { createHash } from 'crypto';
 import { slugifySegment } from '../sync.ts';
+import { AIConfigError } from '../ai/errors.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 const DEFAULT_EXTRACT_ATOMS_MODEL = 'anthropic:claude-haiku-4-5';
@@ -184,6 +185,11 @@ export interface ExtractAtomsOpts {
    * `heartbeat()` on the passed reporter.
    */
   progress?: ProgressReporter;
+  /**
+   * Absolute wall-clock deadline for a bounded drain. When present, each
+   * model call receives an abort signal for only the remaining time.
+   */
+  deadlineAtMs?: number;
 }
 
 interface ExtractedAtom {
@@ -570,6 +576,7 @@ export async function runPhaseExtractAtoms(
         estimated_spend_usd: 0,
         budget_usd: DEFAULT_BUDGET_USD,
         dry_run: opts.dryRun ?? false,
+        deadline_reached: false,
       },
     };
   }
@@ -583,6 +590,7 @@ export async function runPhaseExtractAtoms(
   const failures: Array<{ source: string; error: string }> = [];
   let estimatedSpendUsd = 0;
   let budgetExhausted = false;
+  let deadlineReached = false;
   let extractModel = DEFAULT_EXTRACT_ATOMS_MODEL;
   let budgetCap = DEFAULT_BUDGET_USD;
   try {
@@ -683,6 +691,13 @@ export async function runPhaseExtractAtoms(
   await withBudgetTracker(budgetTracker, async () => {
   for (const item of work) {
     await maybeYield();
+    const remainingMs = opts.deadlineAtMs === undefined
+      ? null
+      : opts.deadlineAtMs - Date.now();
+    if (remainingMs !== null && remainingMs <= 0) {
+      deadlineReached = true;
+      break;
+    }
     if (budgetExhausted || budgetTracker.totalSpent >= budgetCap) {
       if (item.kind === 'transcript') transcriptsSkipped++;
       else pagesSkipped++;
@@ -690,6 +705,12 @@ export async function runPhaseExtractAtoms(
     }
 
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
+    // AbortSignal.timeout uses a 32-bit timer internally in some runtimes.
+    // Clamp only the implementation limit; ordinary drain windows pass their
+    // exact remaining milliseconds.
+    const itemAbortSignal = remainingMs === null
+      ? undefined
+      : AbortSignal.timeout(Math.max(1, Math.min(remainingMs, 2_147_483_647)));
     try {
       const result = await chat({
         model: extractModel,
@@ -701,6 +722,7 @@ export async function runPhaseExtractAtoms(
           },
         ],
         maxTokens: 4096,
+        abortSignal: itemAbortSignal,
       });
       // Post-await yield: closes the "long LLM call past TTL" hazard
       // codex flagged. The 30s throttle inside maybeYield bounds the
@@ -827,6 +849,10 @@ export async function runPhaseExtractAtoms(
       // Reporter rate-limits to ~1 line/sec; safe to tick every iter.
       opts.progress?.tick(1, `${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
     } catch (err) {
+      if (itemAbortSignal?.aborted && opts.deadlineAtMs !== undefined) {
+        deadlineReached = true;
+        break;
+      }
       if (err instanceof BudgetExhausted) {
         budgetExhausted = true;
         if (item.kind === 'transcript') transcriptsSkipped++;
@@ -846,6 +872,11 @@ export async function runPhaseExtractAtoms(
         source: originLabel,
         error: transient ? `${message} [transient — retried next run]` : message,
       });
+      // Permanent auth/model-access errors cannot improve on the next item.
+      // Stop after the first rejection instead of burning the full 50-page
+      // discovery window on identical doomed calls. Transient item failures
+      // still continue so one flaky page does not discard useful progress.
+      if (err instanceof AIConfigError) break;
     }
   }
   });
@@ -878,7 +909,7 @@ export async function runPhaseExtractAtoms(
       kind: 'atoms',
       source_id: sourceId,
       cost_delta: estimatedSpendUsd,
-      round_completed_delta: failures.length === 0 ? 1 : 0,
+      round_completed_delta: failures.length === 0 && !deadlineReached ? 1 : 0,
       halt_delta: failures.length > 0 ? 1 : 0,
     });
   }
@@ -901,6 +932,7 @@ export async function runPhaseExtractAtoms(
       `${transcriptsProcessed}/${transcripts.length} transcripts + ` +
       `${pagesProcessed}/${pages.length} pages` +
       (failures.length > 0 ? ` (${failures.length} failed)` : '') +
+      (deadlineReached ? ' (deadline reached)' : '') +
       (transcriptsSkipped + pagesSkipped > 0
         ? ` (${transcriptsSkipped + pagesSkipped} budget-skipped)`
         : ''),
@@ -920,6 +952,7 @@ export async function runPhaseExtractAtoms(
       budget_usd: budgetCap,
       model: extractModel,
       budget_exhausted: budgetExhausted,
+      deadline_reached: deadlineReached,
       source_id: sourceId,
       dry_run: opts.dryRun ?? false,
     },

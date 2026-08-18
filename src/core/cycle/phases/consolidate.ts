@@ -50,7 +50,11 @@ export async function runPhaseConsolidate(
   opts: ConsolidatePhaseOpts = {},
 ): Promise<PhaseResult> {
   const dryRun = opts.dryRun === true;
-  const threshold = opts.clusterThreshold ?? 0.85;
+  // Cosine ranges vary by embedding provider (dashscope zh facts cluster
+  // well below OpenAI's — p97 pairwise ≈0.71); env override unblocks those.
+  const envThreshold = Number.parseFloat(process.env.GBRAIN_CONSOLIDATE_THRESHOLD ?? '');
+  const threshold = opts.clusterThreshold
+    ?? (Number.isFinite(envThreshold) && envThreshold > 0 && envThreshold < 1 ? envThreshold : 0.85);
   const minPerBucket = opts.minFactsPerBucket ?? 3;
   const minOldestAgeMs = opts.minOldestAgeMs ?? 24 * 60 * 60 * 1000;
 

@@ -42,6 +42,16 @@ export function resolveJobPull(data: Record<string, unknown>): boolean {
 }
 
 /**
+ * A detached supervisor must not retain any pipe owned by the short-lived
+ * launcher. Agent shells close their stdout/stderr pipes as soon as the parent
+ * CLI exits; inheriting either pipe makes the child's EPIPE cleanup handler
+ * terminate an otherwise healthy supervisor. Lifecycle events remain durable
+ * in the supervisor audit log.
+ */
+export const DETACHED_SUPERVISOR_STDIO: ['ignore', 'ignore', 'ignore'] =
+  ['ignore', 'ignore', 'ignore'];
+
+/**
  * Long-lived workers outlive operator config changes. Re-stamp the AI gateway
  * from DB-backed model config immediately before queued jobs enter gateway-backed
  * paths, so a stale process-level default cannot route new work to the wrong
@@ -1871,15 +1881,17 @@ export async function runJobs(engineOrNull: BrainEngine | null, args: string[]):
       const cliPath = parseFlag(args, '--cli-path') ?? resolveGbrainCliPath();
 
       // --detach: fork a background supervisor, print PID payload, exit 0.
-      // Implementation: re-exec the same CLI as a detached child without --detach,
-      // inheriting stderr (so JSONL events still flow to the parent's tail-f
-      // if they wanted to follow logs) but detaching stdin/stdout.
+      // Implementation: re-exec the same CLI as a detached child without
+      // --detach. All stdio must be detached: agent shells close their pipes
+      // when this launcher exits, and an inherited stderr then delivers EPIPE
+      // to the long-lived child, which correctly runs cleanup and exits.
+      // Lifecycle events remain available in ~/.gbrain/audit/supervisor-*.jsonl.
       if (detach) {
         const { spawn } = await import('child_process');
         const childArgs = process.argv.slice(2).filter(a => a !== '--detach');
         const child = spawn(process.execPath, [process.argv[1], ...childArgs], {
           detached: true,
-          stdio: ['ignore', 'ignore', 'inherit'],
+          stdio: DETACHED_SUPERVISOR_STDIO,
           env: process.env,
         });
         child.unref();
