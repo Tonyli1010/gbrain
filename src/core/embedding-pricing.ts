@@ -51,8 +51,6 @@ export const EMBEDDING_PRICING: Record<string, EmbeddingPricing> = {
   // Legacy Voyage models (same page, "older models" section — no free tokens):
   'voyage:voyage-3-large':         { pricePerMTok: 0.18 },
   'voyage:voyage-3':               { pricePerMTok: 0.06 },
-  'voyage:voyage-4-large':         { pricePerMTok: 0.18 },
-  'voyage:voyage-4-lite':          { pricePerMTok: 0.03 },
   // ZeroEntropy (https://www.zeroentropy.dev/pricing, verified 2026-07-28)
   'zeroentropyai:zembed-1':        { pricePerMTok: 0.05 },
   // ZeroEntropy reranker (docs/ai-providers/zeroentropy.md — $0.025/1M tokens).
