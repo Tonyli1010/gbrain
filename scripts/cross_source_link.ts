@@ -73,7 +73,7 @@ async function main() {
 
     if (batch.length === 0) continue;
 
-    const inserted = await engine.addLinksBatch(batch, { auditSite: 'orphan-archive-sprint' });
+    const inserted = await engine.addLinksBatch(batch, { auditSite: 'orphan-archive-sprint' }); // gbrain-allow-direct-insert: one-off operator script; needs explicit cross-source endpoints the reconcile layer can't express
     summary[sourceId].inserted = inserted;
 
     if (inserted < batch.length) {
